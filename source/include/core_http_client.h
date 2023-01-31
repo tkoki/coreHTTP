@@ -1,8 +1,6 @@
 /*
- * coreHTTP v3.0.0
- * Copyright (C) 2022 Amazon.com, Inc. or its affiliates.  All Rights Reserved.
- *
- * SPDX-License-Identifier: MIT
+ * coreHTTP v2.0.0
+ * Copyright (C) 2020 Amazon.com, Inc. or its affiliates.  All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of
  * this software and associated documentation files (the "Software"), to deal in
@@ -32,12 +30,6 @@
 
 #include <stdint.h>
 #include <stddef.h>
-
-/* *INDENT-OFF* */
-#ifdef __cplusplus
-    extern "C" {
-#endif
-/* *INDENT-ON* */
 
 /* HTTP_DO_NOT_USE_CUSTOM_CONFIG allows building the HTTP Client library
  * without a config file. If a config file is provided, the
@@ -156,6 +148,11 @@
  */
 #define HTTP_RANGE_REQUEST_END_OF_FILE              -1
 
+/*
+    tkoki addition.
+*/
+#define HTTP_SEND_WITH_BUFFERING_BUFFER_SIZE    10240UL
+
 /**
  * @ingroup http_enum_types
  * @brief The HTTP Client library return status.
@@ -224,6 +221,15 @@ typedef enum HTTPStatus
      * - #HTTPClient_Send
      */
     HTTPInsufficientMemory,
+
+    /**
+     * @brief The server sent more headers than the configured
+     * #HTTP_MAX_RESPONSE_HEADERS_SIZE_BYTES.
+     *
+     * Functions that may return this value:
+     * - #HTTPClient_Send
+     */
+    HTTPSecurityAlertResponseHeadersSizeLimitExceeded,
 
     /**
      * @brief A response contained the "Connection: close" header, but there
@@ -526,6 +532,11 @@ typedef struct HTTPResponse
     uint32_t respFlags;
 } HTTPResponse_t;
 
+/*
+    tkoki addition.
+*/
+typedef size_t (* read_data_cb)(unsigned char *, size_t *);
+
 /**
  * @brief Initialize the request headers, stored in
  * #HTTPRequestHeaders_t.pBuffer, with initial configurations from
@@ -734,6 +745,7 @@ HTTPStatus_t HTTPClient_AddRangeHeader( HTTPRequestHeaders_t * pRequestHeaders,
  *
  * The application should close the connection with the server if any of the
  * following errors are returned:
+ * - #HTTPSecurityAlertResponseHeadersSizeLimitExceeded
  * - #HTTPSecurityAlertExtraneousResponseData
  * - #HTTPSecurityAlertInvalidChunkHeader
  * - #HTTPSecurityAlertInvalidProtocolVersion
@@ -765,6 +777,7 @@ HTTPStatus_t HTTPClient_AddRangeHeader( HTTPRequestHeaders_t * pRequestHeaders,
  * or extra headers could not be sent in the request.)
  * - #HTTPParserInternalError (Internal parsing error.)\n\n
  * Security alerts are listed below, please see #HTTPStatus_t for more information:
+ * - #HTTPSecurityAlertResponseHeadersSizeLimitExceeded
  * - #HTTPSecurityAlertExtraneousResponseData
  * - #HTTPSecurityAlertInvalidChunkHeader
  * - #HTTPSecurityAlertInvalidProtocolVersion
@@ -820,6 +833,16 @@ HTTPStatus_t HTTPClient_Send( const TransportInterface_t * pTransport,
                               HTTPResponse_t * pResponse,
                               uint32_t sendFlags );
 /* @[declare_httpclient_send] */
+
+/*
+    tkoki addition.
+*/
+HTTPStatus_t HTTPClient_SendWithBuffering( const TransportInterface_t * pTransport,
+                              HTTPRequestHeaders_t * pRequestHeaders,
+                              read_data_cb bufferHandler,
+                              size_t reqBodyBufLen,
+                              HTTPResponse_t * pResponse,
+                              uint32_t sendFlags );
 
 /**
  * @brief Read a header from a buffer containing a complete HTTP response.
@@ -889,11 +912,5 @@ HTTPStatus_t HTTPClient_ReadHeader( const HTTPResponse_t * pResponse,
 /* @[declare_httpclient_strerror] */
 const char * HTTPClient_strerror( HTTPStatus_t status );
 /* @[declare_httpclient_strerror] */
-
-/* *INDENT-OFF* */
-#ifdef __cplusplus
-    }
-#endif
-/* *INDENT-ON* */
 
 #endif /* ifndef CORE_HTTP_CLIENT_H_ */
