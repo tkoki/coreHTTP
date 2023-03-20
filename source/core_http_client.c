@@ -1955,7 +1955,12 @@ static HTTPStatus_t sendHttpBodyWithBuffering( const TransportInterface_t * pTra
         LogDebug( ("Buffering %d", ++loopCnt) );
         readBytes = bufferHandler(readBuffer, &readBufferLength);
         if (readBytes > 0) {
+            // ここでエラーが出てもループする構造が悪い。breakして、上位のリトライに任せるべき。
             returnStatus = sendHttpData( pTransport, getTimestampMs, readBuffer, readBytes );
+            if (returnStatus != HTTPSuccess) {
+                LogError( ("sendHttpData error.") );
+                break;
+            }
         }
     } while(readBytes > 0);
     free(readBuffer);
@@ -2074,6 +2079,7 @@ static HTTPStatus_t receiveAndParseHttpResponse( const TransportInterface_t * pT
         }
         else
         {
+            LogError( ("===== ZERO RECEIVED =====") );
             timeSinceLastRecvMs = pResponse->getTime() - lastRecvTimeMs;
             /* Do not invoke the response parsing for intermediate zero data. */
             shouldParse = 0U;
@@ -2082,6 +2088,7 @@ static HTTPStatus_t receiveAndParseHttpResponse( const TransportInterface_t * pT
              * reached. */
             if( timeSinceLastRecvMs >= retryTimeoutMs )
             {
+                LogError( ("===== TIMEOUT OCCURED =====") );
                 /* Invoke the parsing upon this final zero data to indicate
                  * to the parser that there is no more data available from the
                  * server. */
@@ -2316,6 +2323,7 @@ HTTPStatus_t HTTPClient_SendWithBuffering( const TransportInterface_t * pTranspo
                               uint32_t sendFlags )
 {
     HTTPStatus_t returnStatus = HTTPInvalidParameter;
+    HTTPStatus_t sendStatus = HTTPNetworkError;
 
     if( pTransport == NULL )
     {
@@ -2383,14 +2391,17 @@ HTTPStatus_t HTTPClient_SendWithBuffering( const TransportInterface_t * pTranspo
                                         reqBodyBufLen,
                                         sendFlags );
     }
-
+    sendStatus = returnStatus;  // 送信の成功とそのレスポンス受信の成功を分けて考えたい。
     if( returnStatus == HTTPSuccess )
     {
         returnStatus = receiveAndParseHttpResponse( pTransport,
                                                     pResponse,
                                                     pRequestHeaders );
     }
-
+    if (sendStatus == HTTPSuccess && returnStatus != HTTPSuccess) {
+        LogError(("send request was success but response is error. we treat this as success"));
+        return sendStatus;
+    }
     return returnStatus;
 }
 
