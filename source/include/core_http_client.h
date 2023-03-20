@@ -156,6 +156,11 @@
  */
 #define HTTP_RANGE_REQUEST_END_OF_FILE              -1
 
+/*
+    tkoki addition.
+*/
+#define HTTP_SEND_WITH_BUFFERING_BUFFER_SIZE    10240UL
+
 /**
  * @ingroup http_enum_types
  * @brief The HTTP Client library return status.
@@ -526,6 +531,11 @@ typedef struct HTTPResponse
     uint32_t respFlags;
 } HTTPResponse_t;
 
+/*
+    tkoki addition.
+*/
+typedef size_t (* read_data_cb)(unsigned char *, size_t *);
+
 /**
  * @brief Initialize the request headers, stored in
  * #HTTPRequestHeaders_t.pBuffer, with initial configurations from
@@ -820,6 +830,16 @@ HTTPStatus_t HTTPClient_Send( const TransportInterface_t * pTransport,
                               HTTPResponse_t * pResponse,
                               uint32_t sendFlags );
 /* @[declare_httpclient_send] */
+
+/*
+    tkoki addition.
+*/
+HTTPStatus_t HTTPClient_SendWithBuffering( const TransportInterface_t * pTransport,
+                              HTTPRequestHeaders_t * pRequestHeaders,
+                              read_data_cb bufferHandler,
+                              size_t reqBodyBufLen,
+                              HTTPResponse_t * pResponse,
+                              uint32_t sendFlags );
 
 /**
  * @brief Read a header from a buffer containing a complete HTTP response.

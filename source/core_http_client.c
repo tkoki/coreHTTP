@@ -110,6 +110,13 @@ static HTTPStatus_t sendHttpBody( const TransportInterface_t * pTransport,
                                   HTTPClient_GetCurrentTimeFunc_t getTimestampMs,
                                   const uint8_t * pRequestBodyBuf,
                                   size_t reqBodyBufLen );
+/*
+    tkoki addition.
+*/
+static HTTPStatus_t sendHttpBodyWithBuffering( const TransportInterface_t * pTransport,
+                                  HTTPClient_GetCurrentTimeFunc_t getTimestampMs,
+                                  read_data_cb bufferHandler,
+                                  size_t reqBodyBufLen );
 
 /**
  * @brief A strncpy replacement with HTTP header validation.
@@ -219,6 +226,15 @@ static HTTPStatus_t sendHttpRequest( const TransportInterface_t * pTransport,
                                      HTTPClient_GetCurrentTimeFunc_t getTimestampMs,
                                      HTTPRequestHeaders_t * pRequestHeaders,
                                      const uint8_t * pRequestBodyBuf,
+                                     size_t reqBodyBufLen,
+                                     uint32_t sendFlags );
+/*
+    tkoki addition.
+*/
+static HTTPStatus_t sendHttpRequestWithBuffering( const TransportInterface_t * pTransport,
+                                     HTTPClient_GetCurrentTimeFunc_t getTimestampMs,
+                                     HTTPRequestHeaders_t * pRequestHeaders,
+                                     read_data_cb bufferHandler,
                                      size_t reqBodyBufLen,
                                      uint32_t sendFlags );
 
@@ -1957,6 +1973,48 @@ static HTTPStatus_t sendHttpBody( const TransportInterface_t * pTransport,
 
 /*-----------------------------------------------------------*/
 
+/*
+    tkoki addition.
+*/
+static HTTPStatus_t sendHttpBodyWithBuffering( const TransportInterface_t * pTransport,
+                                  HTTPClient_GetCurrentTimeFunc_t getTimestampMs,
+                                  read_data_cb bufferHandler,
+                                  size_t reqBodyBufLen )
+{
+    HTTPStatus_t returnStatus = HTTPSuccess;
+    int loopCnt = 0;
+
+    assert( pTransport != NULL );
+    assert( pTransport->send != NULL );
+    assert( bufferHandler != NULL );
+    size_t readBytes = 0;
+    size_t readBufferLength = HTTP_SEND_WITH_BUFFERING_BUFFER_SIZE;
+    unsigned char *readBuffer = (unsigned char *)malloc(readBufferLength);
+    if (readBuffer == NULL) {
+        LogError( ("Can't allocate readBuffer") );
+        return HTTPInvalidParameter;
+    }
+    /* Send the request body. */
+    LogDebug( ( "Sending the HTTP request body With Buffering: BodyBytes=%lu",
+                ( unsigned long ) reqBodyBufLen ) );
+    do {
+        LogDebug( ("Buffering %d", ++loopCnt) );
+        readBytes = bufferHandler(readBuffer, &readBufferLength);
+        if (readBytes > 0) {
+            // ここでエラーが出てもループする構造が悪い。breakして、上位のリトライに任せるべき。
+            returnStatus = sendHttpData( pTransport, getTimestampMs, readBuffer, readBytes );
+            if (returnStatus != HTTPSuccess) {
+                LogError( ("sendHttpData error.") );
+                break;
+            }
+        }
+    } while(readBytes > 0);
+    free(readBuffer);
+    return returnStatus;
+}
+
+/*-----------------------------------------------------------*/
+
 static HTTPStatus_t getFinalResponseStatus( HTTPParsingState_t parsingState,
                                             size_t totalReceived,
                                             size_t responseBufferLen )
@@ -2070,6 +2128,7 @@ static HTTPStatus_t receiveAndParseHttpResponse( const TransportInterface_t * pT
         }
         else
         {
+            LogError( ("===== ZERO RECEIVED =====") );
             timeSinceLastRecvMs = pResponse->getTime() - lastRecvTimeMs;
             /* Do not invoke the response parsing for intermediate zero data. */
             shouldParse = 0U;
@@ -2078,6 +2137,7 @@ static HTTPStatus_t receiveAndParseHttpResponse( const TransportInterface_t * pT
              * reached. */
             if( timeSinceLastRecvMs >= retryTimeoutMs )
             {
+                LogError( ("===== TIMEOUT OCCURED =====") );
                 /* Invoke the parsing upon this final zero data to indicate
                  * to the parser that there is no more data available from the
                  * server. */
@@ -2159,6 +2219,44 @@ static HTTPStatus_t sendHttpRequest( const TransportInterface_t * pTransport,
         {
             LogDebug( ( "A request body was not sent: pRequestBodyBuf is NULL." ) );
         }
+    }
+
+    return returnStatus;
+}
+
+/*-----------------------------------------------------------*/
+
+/*
+    tkoki addition.
+*/
+static HTTPStatus_t sendHttpRequestWithBuffering( const TransportInterface_t * pTransport,
+                                     HTTPClient_GetCurrentTimeFunc_t getTimestampMs,
+                                     HTTPRequestHeaders_t * pRequestHeaders,
+                                     read_data_cb bufferHandler,
+                                     size_t reqBodyBufLen,
+                                     uint32_t sendFlags )
+{
+    HTTPStatus_t returnStatus = HTTPSuccess;
+
+    assert( pTransport != NULL );
+    assert( pRequestHeaders != NULL );
+    assert( bufferHandler != NULL );
+    assert( getTimestampMs != NULL );
+
+    /* Send the headers, which are at one location in memory. */
+    returnStatus = sendHttpHeaders( pTransport,
+                                    getTimestampMs,
+                                    pRequestHeaders,
+                                    reqBodyBufLen,
+                                    sendFlags );
+
+    /* Send the body, which is at another location in memory. */
+    if( returnStatus == HTTPSuccess )
+    {
+        returnStatus = sendHttpBodyWithBuffering( pTransport,
+                                        getTimestampMs,
+                                        bufferHandler,
+                                        reqBodyBufLen );
     }
 
     return returnStatus;
@@ -2264,6 +2362,101 @@ HTTPStatus_t HTTPClient_Send( const TransportInterface_t * pTransport,
                                                     pRequestHeaders );
     }
 
+    return returnStatus;
+}
+
+/*-----------------------------------------------------------*/
+
+/*
+    tkoki addition.
+*/
+HTTPStatus_t HTTPClient_SendWithBuffering( const TransportInterface_t * pTransport,
+                              HTTPRequestHeaders_t * pRequestHeaders,
+                              read_data_cb bufferHandler,
+                              size_t reqBodyBufLen,
+                              HTTPResponse_t * pResponse,
+                              uint32_t sendFlags )
+{
+    HTTPStatus_t returnStatus = HTTPInvalidParameter;
+    HTTPStatus_t sendStatus = HTTPNetworkError;
+
+    if( pTransport == NULL )
+    {
+        LogError( ( "Parameter check failed: pTransport interface is NULL." ) );
+    }
+    else if( pTransport->send == NULL )
+    {
+        LogError( ( "Parameter check failed: pTransport->send is NULL." ) );
+    }
+    else if( pTransport->recv == NULL )
+    {
+        LogError( ( "Parameter check failed: pTransport->recv is NULL." ) );
+    }
+    else if( pRequestHeaders == NULL )
+    {
+        LogError( ( "Parameter check failed: pRequestHeaders is NULL." ) );
+    }
+    else if( pRequestHeaders->pBuffer == NULL )
+    {
+        LogError( ( "Parameter check failed: pRequestHeaders->pBuffer is NULL." ) );
+    }
+    else if( pRequestHeaders->headersLen < HTTP_MINIMUM_REQUEST_LINE_LENGTH )
+    {
+        LogError( ( "Parameter check failed: pRequestHeaders->headersLen "
+                    "does not meet minimum the required length. "
+                    "MinimumRequiredLength=%u, HeadersLength=%lu",
+                    HTTP_MINIMUM_REQUEST_LINE_LENGTH,
+                    ( unsigned long ) ( pRequestHeaders->headersLen ) ) );
+    }
+    else if( pRequestHeaders->headersLen > pRequestHeaders->bufferLen )
+    {
+        LogError( ( "Parameter check failed: pRequestHeaders->headersLen > "
+                    "pRequestHeaders->bufferLen." ) );
+    }
+    else if( pResponse == NULL )
+    {
+        LogError( ( "Parameter check failed: pResponse is NULL. " ) );
+    }
+    else if( pResponse->pBuffer == NULL )
+    {
+        LogError( ( "Parameter check failed: pResponse->pBuffer is NULL." ) );
+    }
+    else if( bufferHandler == NULL )
+    {
+        LogError( ( "bufferHandler not specified." ) );
+    }
+    else
+    {
+        if( pResponse->getTime == NULL )
+        {
+            /* Set a zero timestamp function when the application did not configure
+             * one. */
+            pResponse->getTime = getZeroTimestampMs;
+        }
+
+        returnStatus = HTTPSuccess;
+    }
+
+    if( returnStatus == HTTPSuccess )
+    {
+        returnStatus = sendHttpRequestWithBuffering( pTransport,
+                                        pResponse->getTime,
+                                        pRequestHeaders,
+                                        bufferHandler,
+                                        reqBodyBufLen,
+                                        sendFlags );
+    }
+    sendStatus = returnStatus;  // 送信の成功とそのレスポンス受信の成功を分けて考えたい。
+    if( returnStatus == HTTPSuccess )
+    {
+        returnStatus = receiveAndParseHttpResponse( pTransport,
+                                                    pResponse,
+                                                    pRequestHeaders );
+    }
+    if (sendStatus == HTTPSuccess && returnStatus != HTTPSuccess) {
+        LogError(("send request was success but response is error. we treat this as success"));
+        return sendStatus;
+    }
     return returnStatus;
 }
 
